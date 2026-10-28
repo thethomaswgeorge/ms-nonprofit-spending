@@ -216,8 +216,12 @@ const fmtEIN=e=>{const s=String(e).padStart(9,'0');return s.slice(0,2)+'-'+s.sli
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 // ---------- pattern tests ----------
-const RX_EXCL=/MISSISSIPPI STATE UNIV|MS STATE UNIV|UNIVERSITY OF MISSISSIPPI|UNIV OF MISSISSIPPI|UNIV OF MS\b|UNIVERSITY OF MS\b|SOUTHERN MISSISSIPPI|UNIV OF SOUTHERN|SOUTHERN MISS\b|\bUSM\b|JACKSON STATE UNIV|ALCORN STATE|DELTA STATE UNIV|VALLEY STATE|UNIV FOR WOMEN|\bMUW\b|\bUMMC\b|UNIV OF MS MED|COMMUNITY COLLEGE|COMM COLLEGE|JUNIOR COLLEGE|JR COLLEGE|\bCC\b|SCH DIST|SCHOOL DIST|\bPUBLIC SCHOOL|\bSCHOOL DISTRICT/;
-const RX_GOV=/SCH DIST|SCHOOL DIST|\bCOUNTY\b|\bCTY\b|CITY OF|TOWN OF|BOARD OF SUPERVISORS|ELECTRIC POWER|ELECTRIC COOP|POWER ASSN|POWER ASSOC|EPA\b|CREDIT UNION|\bFCU\b|MAGCOR|STATE OF|DEPT OF|DEPARTMENT OF|MUNICIPAL/;
+const RX_EXCL=/MISSISSIPPI STATE UNIV|MS STATE UNIV|UNIVERSITY OF MISSISSIPPI|UNIV OF MISSISSIPPI|UNIV OF MS\b|UNIVERSITY OF MS\b|SOUTHERN MISSISSIPPI|UNIV OF SOUTHERN MS|SOUTHERN MISS\b|\bUSM\b|JACKSON STATE UNIV|ALCORN STATE|DELTA STATE UNIV|VALLEY STATE|UNIV FOR WOMEN|\bMUW\b|\bUMMC\b|UNIV OF MS MED|COMMUNITY COLLEGE|COMM COLLEGE|JUNIOR COLLEGE|JR COLLEGE|SCH DIST|SCHOOL DIST|\bPUBLIC SCHOOL|\bSCHOOL DISTRICT/;
+// Affiliated foundations and associations are separate non-profits, not the excluded institution itself.
+const RX_AFFIL=/FOUND|ASSOC|ASSN|ALUMNI|RESEARCH|EDUCATIONAL/;
+const RX_GOV=/SCH DIST|SCHOOL DIST|CITY OF|TOWN OF|VILLAGE OF|BOARD OF SUPERVISORS|(COUNTY|CTY) (GENERAL )?HOSP|HOSPITAL DIST|SOLID WASTE|ELEC(TRIC)? POWER( ASS(N|C|OC|OCIATION))?$|ELEC POWER-|ELECTRIC( COOPERATIVE| CORP)?$|EPA$|CREDIT UNION|\bFCU\b|MAGCOR|^STATE OF|^(MS |MISSISSIPPI )?(DEPT|DEPARTMENT) OF/;
+// Per-EIN totals by year over ALL lines: single-year and spike tests describe an entity's whole history, so filters must not change them.
+const HIST=new Map();for(const r of R){let b=HIST.get(r[3]);if(!b){b=[0,0,0,0,0,0];HIST.set(r[3],b)}b[r[0]-2021]+=r[9]}
 const RX_TRUNC=/( &| OF| AND| FOR| THE| IN| ON| AT|-|,| INTERNAT| MU| CE| CEN| FOUN| INDUSTR| ASSOCIA| MUSEU| SCHOO| COMMI| COMMU| COUN| AGE| INC\.|'S)$/;
 
 // ---------- filter state ----------
@@ -243,7 +247,7 @@ function filterLines(){
   FL=[];
   for(let i=0;i<R.length;i++){const r=R[i];
     if(yrs&&!yrs.has(r[0]))continue; if(ag>=0&&r[2]!==ag)continue; if(st>=0&&r[6]!==st)continue; if(r[9]<min)continue;
-    if(q){ if(!(D.np[r[5]].includes(q)||String(r[3]).includes(q)||String(r[4]).includes(q)||D.ei[r[7]].toUpperCase().includes(q)||D.ag[r[2]].toUpperCase().includes(q)))continue; }
+    if(q){ if(!(D.np[r[5]].includes(q)||String(r[3]).includes(q.replace(/-/g,''))||String(r[4]).includes(q)||D.ei[r[7]].toUpperCase().includes(q)||D.ag[r[2]].toUpperCase().includes(q)))continue; }
     FL.push(i);}
 }
 
@@ -264,13 +268,13 @@ function aggregate(){
     const nm=e.name;
     f.multiName=e.names.size>1; f.multiVN=e.vns.size>1; f.multiState=e.states.size>1;
     f.ein8=e.ein<1e8;
-    f.excluded=[...e.names.keys()].some(n=>RX_EXCL.test(D.np[n]));
+    f.excluded=[...e.names.keys()].some(n=>RX_EXCL.test(D.np[n])&&!RX_AFFIL.test(D.np[n]));
     f.gov=!f.excluded&&[...e.names.keys()].some(n=>RX_GOV.test(D.np[n]));
     f.person=PERSON.has(e.ein);
     f.trunc=[...e.names.keys()].some(n=>{const s=D.np[n];return s.length>=35||RX_TRUNC.test(s)});
     f.sharedName=[...e.names.keys()].some(n=>nameEins.get(n).size>1);
-    const active=e.byYear.filter(v=>v>0).length; f.oneYear=active===1&&e.total>=1e6;
-    f.spike=false;for(let y=1;y<6;y++){if(e.byYear[y-1]>=1e5&&e.byYear[y]>=3*e.byYear[y-1]){f.spike=true;break}}
+    const hy=HIST.get(e.ein);const active=hy.filter(v=>v>0).length; f.oneYear=active===1&&hy.reduce((a,v)=>a+v,0)>=1e6;
+    f.spike=false;for(let y=1;y<6;y++){if(hy[y-1]>=1e5&&hy[y]>=3*hy[y-1]){f.spike=true;break}}
     f.codeFlip=[...e.etByAg.values()].some(s=>s.size>1);
     f.round=e.round>0; f.zero=e.zero>0;
     f.outState=[...e.states].some(s=>D.st[s]!=='MS');
@@ -285,12 +289,12 @@ const SIG=[
  {k:'multiName',sev:'warn',t:'Same EIN, different names',d:'One EIN paid under two or more payee names. Name-based searches on the official dashboard split these.',m:'Entity has >1 distinct Non-Profit name in the filtered lines.'},
  {k:'multiVN',sev:'warn',t:'Same EIN, multiple vendor numbers',d:'Duplicate vendor master records for one organization. Vendor-level rollups undercount these.',m:'Entity has >1 distinct Vendor Number.'},
  {k:'sharedName',sev:'warn',t:'Same name, different EINs',d:'The recorded payee name is shared by two or more EINs. Either chapters/affiliates or a mis-keyed EIN.',m:'A payee name string appears under more than one EIN.'},
- {k:'excluded',sev:'crit',t:'Excluded public institutions present',d:'The dashboard states Mississippi public universities, community colleges and school districts are excluded, yet these names appear.',m:'Any name matches a Mississippi public university (MSU, UM/UMMC, USM, JSU, Alcorn, Delta State, MVSU, MUW), COMMUNITY/JUNIOR COLLEGE, or SCH(OOL) DIST/PUBLIC SCHOOL.'},
- {k:'gov',sev:'crit',t:'Government or co-op, not a non-profit',d:'Counties, municipalities, electric co-ops, credit unions and state entities such as MAGCOR appear in a non-profit list.',m:'Any name matches county/city/town, electric power/co-op, credit union/FCU, MAGCOR, DEPT OF or MUNICIPAL.'},
+ {k:'excluded',sev:'crit',t:'Excluded public institutions present',d:'The dashboard states Mississippi public universities, community colleges and school districts are excluded, yet these names appear.',m:'Any name matches a Mississippi public university (MSU, UM/UMMC, USM, JSU, Alcorn, Delta State, MVSU, MUW), COMMUNITY/JUNIOR COLLEGE, or SCH(OOL) DIST/PUBLIC SCHOOL, and is not an affiliated foundation, association or alumni/research body.'},
+ {k:'gov',sev:'crit',t:'Government or co-op, not a non-profit',d:'Municipalities, county hospitals and utilities, electric co-ops, credit unions and state entities such as MAGCOR appear in a non-profit list.',m:'Name matches CITY/TOWN/VILLAGE OF, board of supervisors, county hospital or hospital district, solid waste, an electric power association/co-op, EPA, credit union/FCU, MAGCOR, or begins STATE OF / DEPT OF. Names that only mention a county (chambers, CASA, humane societies) are not flagged.'},
  {k:'person',sev:'crit',t:'Payee looks like an individual',d:'The vendor name reads as a personal name rather than an organization.',m:'Curated list of names with no organizational keyword and a first/last-name shape.'},
  {k:'ein8',sev:'warn',t:'8-digit EIN (leading zero lost)',d:'EIN stored as a number, dropping its leading zero. Joins to IRS data will fail for these.',m:'EIN value below 100,000,000.'},
- {k:'oneYear',sev:'warn',t:'Single-year recipient, $1M+',d:'Paid in exactly one fiscal year, never before or after, for at least $1M.',m:'Non-zero total in exactly one of FY2021–2026 and total ≥ $1,000,000.'},
- {k:'spike',sev:'warn',t:'Year-over-year jump ≥ 3×',d:'Annual total tripled or more versus the prior year, from a base of at least $100K.',m:'byYear[y] ≥ 3 × byYear[y−1] where byYear[y−1] ≥ $100K.'},
+ {k:'oneYear',sev:'warn',t:'Single-year recipient, $1M+',d:'Paid in exactly one fiscal year, never before or after, for at least $1M.',m:'Non-zero total in exactly one of FY2021–2026 and total ≥ $1,000,000, measured over all lines for the EIN (filters do not change it).'},
+ {k:'spike',sev:'warn',t:'Year-over-year jump ≥ 3×',d:'Annual total tripled or more versus the prior year, from a base of at least $100K.',m:'byYear[y] ≥ 3 × byYear[y−1] where byYear[y−1] ≥ $100K, measured over all lines for the EIN (filters do not change it).'},
  {k:'codeFlip',sev:'info',t:'Expense type changes within an agency',d:'The same agency coded payments to this entity under more than one expense type (e.g. grant vs. contractual services).',m:'For some agency, the entity has >1 distinct Expense Type.'},
  {k:'round',sev:'info',t:'Round-number payments ≥ $1M',d:'Lines that are an exact multiple of $100,000 at $1M or more, typical of earmarks and lump-sum appropriations.',m:'amount ≥ 1,000,000 and amount mod 100,000 = 0.'},
  {k:'multiState',sev:'info',t:'Same EIN, multiple states',d:'The vendor address state differs across lines for one EIN.',m:'Entity has >1 distinct State.'},
@@ -321,7 +325,7 @@ function renderTiles(){
   const tiles=[
    ['Total paid',fmt$(tot),FL.length.toLocaleString()+' lines'],
    ['Entities (EINs)',n.toLocaleString(),ag+' paying agencies'],
-   ['Top-10 share',n?(t10/tot*100).toFixed(1)+'%':'–',fmt$(t10)+' to ten EINs'],
+   ['Top-10 share',tot?(t10/tot*100).toFixed(1)+'%':'–',fmt$(t10)+' to ten EINs'],
    ['Out-of-state',tot?(out/tot*100).toFixed(1)+'%':'–',fmt$(out)+' to non-MS addresses'],
    ['Entities with warnings',flagged.toLocaleString(),n?(flagged/n*100).toFixed(0)+'% of entities':''],
   ];
